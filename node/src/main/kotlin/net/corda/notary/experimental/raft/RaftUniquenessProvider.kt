@@ -211,7 +211,7 @@ class RaftUniquenessProvider(
             timeWindow: TimeWindow?,
             references: List<StateRef>
     ): CordaFuture<UniquenessProvider.Result> {
-        log.info("Attempting to commit input states: ${states.joinToString()} for txId: $txId")
+        log.debug { "Attempting to commit input states: ${states.joinToString()} for txId: $txId" }
         val commitCommand = CommitTransaction(
                 states,
                 txId,

@@ -181,7 +181,7 @@ class PersistentUniquenessProvider(val clock: Clock, val database: CordaPersiste
         val future = openFuture<UniquenessProvider.Result>()
         val request = CommitRequest(states, txId, callerIdentity, requestSignature, timeWindow, references, future)
         requestQueue.put(request)
-        log.info("Request added to queue. txId: $txId")
+        log.debug { "Request added to queue. txId: $txId" }
         return future
     }
 
