@@ -21,6 +21,8 @@ interface RPCConnection<out I : RPCOps> : Closeable {
     /** The RPC protocol version reported by the server. */
     val serverProtocolVersion: Int
 
+    var currentState: CurrentState
+
     /**
      * Closes this client gracefully by sending a notification to the server, so it can immediately clean up resources.
      * If the server is not available this method may block for a short period until it's clear the server is not
@@ -37,4 +39,8 @@ interface RPCConnection<out I : RPCOps> : Closeable {
      * block waiting for it to come back, which typically happens in integration tests and demos rather than production.
      */
     fun forceClose()
+
+    enum class CurrentState {
+        UNCONNECTED, CONNECTED, CONNECTING, CLOSED, DIED
+    }
 }

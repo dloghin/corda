@@ -1,17 +1,18 @@
 package net.corda.node.services.rpc
 
 import net.corda.client.rpc.CordaRPCClient
-import net.corda.client.rpc.CordaRPCClientConfiguration
+import net.corda.client.rpc.GracefulReconnect
 import net.corda.client.rpc.internal.ReconnectingCordaRPCOps
 import net.corda.client.rpc.notUsed
 import net.corda.core.contracts.Amount
+import net.corda.core.contracts.StateAndRef
+import net.corda.core.contracts.StateRef
 import net.corda.core.flows.StateMachineRunId
 import net.corda.core.internal.concurrent.transpose
+import net.corda.core.messaging.CordaRPCOps
 import net.corda.core.messaging.StateMachineUpdate
 import net.corda.core.node.services.Vault
-import net.corda.core.node.services.vault.PageSpecification
-import net.corda.core.node.services.vault.QueryCriteria
-import net.corda.core.node.services.vault.builder
+import net.corda.core.node.services.vault.*
 import net.corda.core.utilities.*
 import net.corda.finance.contracts.asset.Cash
 import net.corda.finance.flows.CashIssueAndPaymentFlow
@@ -30,6 +31,7 @@ import net.corda.testing.node.User
 import net.corda.testing.node.internal.FINANCE_CORDAPPS
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Test
+import java.time.Instant
 import java.util.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -38,6 +40,7 @@ import kotlin.concurrent.thread
 import kotlin.math.absoluteValue
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.currentStackTrace
 
 /**
  * This is a stress test for the rpc reconnection logic, which triggers failures in a probabilistic way.
@@ -52,6 +55,9 @@ class RpcReconnectTests {
 
         private val log = contextLogger()
     }
+
+    private val vaultReconciliation = VaultReconciliation()
+    private val observedPennies: MutableSet<Long> = Collections.synchronizedSet(mutableSetOf<Long>())
 
     private val portAllocator = incrementalPortAllocation()
 
@@ -116,8 +122,13 @@ class RpcReconnectTests {
 
             val addressesForRpc = addresses.map { it.proxyAddress }
             // DOCSTART rpcReconnectingRPC
+            val reconnect = GracefulReconnect(onReconnect = {
+                assertThat(currentStackTrace().size).isLessThan(70).withFailMessage("Reconnect logic has stack levels looking like infinite recursion. May lead to an overflow?")
+                vaultReconciliation.reconcile { observedPennies.add(it.state.data.amount.quantity) }
+            })
             val client = CordaRPCClient(addressesForRpc)
-            val bankAReconnectingRpc = client.start(demoUser.username, demoUser.password, gracefulReconnect = true).proxy as ReconnectingCordaRPCOps
+            val bankAReconnectingRpc = client.start(demoUser.username, demoUser.password, gracefulReconnect = reconnect).proxy as ReconnectingCordaRPCOps
+            vaultReconciliation.rpc = bankAReconnectingRpc
             // DOCEND rpcReconnectingRPC
 
             // Observe the vault and collect the observations.
@@ -129,6 +140,10 @@ class RpcReconnectTests {
                     PageSpecification(1, 1))
             val vaultSubscription = vaultFeed.updates.subscribe { update: Vault.Update<Cash.State> ->
                 log.info("vault update produced ${update.produced.map { it.state.data.amount }} consumed ${update.consumed.map { it.ref }}")
+                for (event in update.produced + update.consumed) {
+                    vaultReconciliation.updateLastHandledTimestamp(bankAReconnectingRpc, event.ref)
+                    observedPennies.add(event.state.data.amount.quantity)
+                }
                 vaultEvents.add(update)
             }
             // DOCEND rpcReconnectingRPCVaultTracking
@@ -323,4 +338,63 @@ class RpcReconnectTests {
     private fun getRandomAddress() = NetworkHostAndPort("localhost", portAllocator.nextPort())
 
     data class AddressPair(val proxyAddress: NetworkHostAndPort, val nodeAddress: NetworkHostAndPort)
+}
+
+class VaultReconciliation {
+
+    companion object {
+        /**
+         * Vault updates can be observed out of temporal order. When there is a need to reconcile, we query the vault for states
+         * that have been recorded since the recorded timestamp of the last handled event minus this duration.
+         */
+        val temporalOrderingUncertainty = 1.hours
+    }
+
+    @Volatile
+    var lastRecordedTime: Instant = Instant.now()
+
+    lateinit var rpc: CordaRPCOps
+
+    /**
+     * This method supposed to be passed into the `onReconnect` parameter of the ReconnectingRPCClient.
+     *
+     * On reconnect we fetch all states from the vault that have been recorded since the recorded timestamp of the last handled event minus
+     * the temporal ordering uncertainty defined above. We are subtracting this duration from the last recorded timestamp since the
+     * vault updates are not guaranteed to be observed in recorded timestamp order.
+     *
+     * Note that vault pages are fetched in independent database transactions and there might be states missing under certain conditions
+     * when the vault records new states while we are fetching pages, especially if the node clock that determines the recorded timestamp
+     * is jumping backwards.
+     *
+     * In some cases reconcile might need to use an internal buffer of handled states, to avoid calling the handler function more than once
+     * for a given state. This depends on the requirements of the application. In this test we are simply adding each state to a set, therefore
+     * it's not a problem to handle a state several times.
+     */
+    fun reconcile(onNewState: (StateAndRef<Cash.State>) -> Unit) {
+        val beforeLastDelivery = lastRecordedTime.minus(temporalOrderingUncertainty)
+        val upperTimeBound = Instant.now()
+        val timeCondition = QueryCriteria.TimeCondition(QueryCriteria.TimeInstantType.RECORDED, ColumnPredicate.Between(beforeLastDelivery, upperTimeBound))
+        val queryCriteria = QueryCriteria.VaultQueryCriteria(Vault.StateStatus.ALL, timeCondition = timeCondition)
+        val sorting = Sort(setOf(Sort.SortColumn(SortAttribute.Standard(Sort.VaultStateAttribute.RECORDED_TIME), Sort.Direction.ASC)))
+        var pageNumber = 1
+        val pageSize = 1000
+        do {
+            val paging = PageSpecification(pageNumber, pageSize)
+            val snapshot = rpc.vaultQueryBy(queryCriteria, paging, sorting, Cash.State::class.java)
+            for (state in snapshot.states) {
+                onNewState(state)
+                updateLastHandledTimestamp(rpc, state.ref)
+            }
+            pageNumber++
+        } while (pageSize * (pageNumber - 1) < snapshot.totalStatesAvailable)
+    }
+
+    // TODO: As an optimisation, we could add a second method that operates on `Vault.Update`s, querying the vault
+    // for all the states in the update and updating the timestamp to the maximum recorded time.
+    fun updateLastHandledTimestamp(rpc: CordaRPCOps, ref: StateRef) {
+        val recordedTime = rpc.vaultQueryByCriteria(
+                QueryCriteria.VaultQueryCriteria(status = Vault.StateStatus.ALL, stateRefs = listOf(ref)),
+                Cash.State::class.java).statesMetadata.single().recordedTime
+        lastRecordedTime = recordedTime
+    }
 }

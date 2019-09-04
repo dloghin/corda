@@ -2,6 +2,8 @@ package net.corda.client.rpc.internal
 
 import net.corda.client.rpc.CordaRPCClientConfiguration
 import net.corda.client.rpc.RPCConnection
+import net.corda.client.rpc.RPCConnection.CurrentState.CLOSED
+import net.corda.client.rpc.RPCConnection.CurrentState.CONNECTED
 import net.corda.client.rpc.RPCException
 import net.corda.core.context.Actor
 import net.corda.core.context.Trace
@@ -101,6 +103,8 @@ class RPCClient<I : RPCOps>(
 
                 log.debug("RPC connected, returning proxy")
                 object : RPCConnection<I> {
+                    override var currentState: RPCConnection.CurrentState = CONNECTED
+
                     override val proxy = ops
                     override val serverProtocolVersion = serverProtocolVersion
 
@@ -111,6 +115,7 @@ class RPCClient<I : RPCOps>(
                             proxyHandler.forceClose()
                         }
                         serverLocator.close()
+                        currentState = CLOSED
                     }
 
                     override fun notifyServerAndClose() {
