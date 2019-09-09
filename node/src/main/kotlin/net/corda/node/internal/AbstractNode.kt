@@ -1075,14 +1075,16 @@ abstract class AbstractNode<S>(val configuration: NodeConfiguration,
             return AnalysisConfiguration.createRoot(
                 userSource = cordaSource,
                 whitelist = Whitelist.MINIMAL,
+                visibleAnnotations = setOf(
+                    CordaSerializable::class.java,
+                    ConstructorForDeserialization::class.java,
+                    DeprecatedConstructorForDeserialization::class.java
+                ),
                 bootstrapSource = djvmBootstrapSource
             ).createChild(
                 userSource = UserPathSource(userSource),
                 newMinimumSeverityLevel = null,
-                visibleAnnotations = setOf(
-                    CordaSerializable::class.java,
-                    ConstructorForDeserialization::class.java
-                )
+                visibleAnnotations = emptySet()
             )
         }
     }
