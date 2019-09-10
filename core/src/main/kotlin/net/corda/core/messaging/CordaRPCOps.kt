@@ -4,6 +4,7 @@ import net.corda.core.CordaInternal
 import net.corda.core.concurrent.CordaFuture
 import net.corda.core.context.InvocationContext
 import net.corda.core.contracts.ContractState
+import net.corda.core.cordapp.Cordapp
 import net.corda.core.crypto.SecureHash
 import net.corda.core.flows.FlowInitiator
 import net.corda.core.flows.FlowLogic
@@ -420,6 +421,8 @@ interface CordaRPCOps : RPCOps {
      * @return whether the node will shutdown when the pending flows count reaches zero.
      */
     fun isWaitingForShutdown(): Boolean
+
+    fun getInstalledCordapps(): List<Cordapp.Info>
 }
 
 /**

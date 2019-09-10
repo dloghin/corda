@@ -7,6 +7,7 @@ import net.corda.core.crypto.SecureHash
 import net.corda.core.flows.FlowLogic
 import net.corda.core.internal.cordapp.CordappImpl.Companion.UNKNOWN_VALUE
 import net.corda.core.schemas.MappedSchema
+import net.corda.core.serialization.CordaSerializable
 import net.corda.core.serialization.SerializationCustomSerializer
 import net.corda.core.serialization.SerializationWhitelist
 import net.corda.core.serialization.SerializeAsToken
@@ -67,6 +68,7 @@ interface Cordapp {
      * @property version Cordapp's version
      */
     @DoNotImplement
+    @CordaSerializable
     interface Info {
         val shortName: String
         val vendor: String

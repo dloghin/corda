@@ -6,6 +6,7 @@ import net.corda.core.concurrent.CordaFuture
 import net.corda.core.context.InvocationContext
 import net.corda.core.context.InvocationOrigin
 import net.corda.core.contracts.ContractState
+import net.corda.core.cordapp.Cordapp
 import net.corda.core.crypto.SecureHash
 import net.corda.core.flows.FlowInitiator
 import net.corda.core.flows.FlowLogic
@@ -363,5 +364,9 @@ internal class CordaRPCOpsImpl(
      */
     private inline fun <reified TARGET> Class<*>.checkIsA() {
         require(TARGET::class.java.isAssignableFrom(this)) { "$name is not a ${TARGET::class.java.name}" }
+    }
+
+    override fun getInstalledCordapps(): List<Cordapp.Info> {
+        return services.cordappProvider.cordapps.map { it -> it.info }
     }
 }
